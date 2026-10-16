@@ -11,6 +11,13 @@ import tpf_model_v4 as M
 
 st.set_page_config(page_title="TPF Decision Support", page_icon="scale", layout="wide")
 
+def money(col, label, value, step, help=None, key=None):
+    """USD number_input with a comma-formatted echo caption beneath it,
+    so large figures (e.g. 4,000,000) are readable while typing."""
+    v = col.number_input(label, 0.0, value=float(value), step=float(step), help=help, key=key)
+    col.caption(f"= ${v:,.0f}")
+    return v
+
 NAVY = "#03395F"
 st.markdown(f"""
 <style>
@@ -70,17 +77,17 @@ def head_editor(i, h):
     h["kind"]=c[1].selectbox("Kind", KINDS, index=KINDS.index(h["kind"]), key=f"knd{i}")
     if h["kind"]=="delay":
         h["delay_days"]=c[2].number_input("Delay days", 0.0, value=float(h["delay_days"]), key=f"dd{i}")
-        h["daily_rate"]=c[3].number_input("Daily rate $", 0.0, value=float(h["daily_rate"]), key=f"dr{i}")
+        h["daily_rate"]=money(c[3], "Daily rate $", h["daily_rate"], 1000.0, key=f"dr{i}")
         h["delay_method"]=c[4].selectbox("Delay method", DELAYM, index=DELAYM.index(h["delay_method"]), key=f"dm{i}")
         h["prol_method"]=c[5].selectbox("Prol. method", PROLM, index=PROLM.index(h["prol_method"]), key=f"pm{i}")
     elif h["kind"]=="disruption":
-        h["nominal"]=c[2].number_input("Pleaded $", 0.0, value=float(h["nominal"]), key=f"nm{i}")
+        h["nominal"]=money(c[2], "Pleaded $", h["nominal"], 100_000.0, key=f"nm{i}")
         h["disr_method"]=c[4].selectbox("Disr. method", DISRM, index=DISRM.index(h["disr_method"]), key=f"sm{i}")
     elif h["kind"]=="prolongation":
-        h["nominal"]=c[2].number_input("Pleaded $", 0.0, value=float(h["nominal"]), key=f"nm{i}")
+        h["nominal"]=money(c[2], "Pleaded $", h["nominal"], 100_000.0, key=f"nm{i}")
         h["prol_method"]=c[5].selectbox("Prol. method", PROLM, index=PROLM.index(h["prol_method"]), key=f"pm{i}")
     else:
-        h["nominal"]=c[2].number_input("Pleaded $", 0.0, value=float(h["nominal"]), key=f"nm{i}")
+        h["nominal"]=money(c[2], "Pleaded $", h["nominal"], 100_000.0, key=f"nm{i}")
     h["substantiation"]=c[6].slider("Substantiation", 1, 5, int(h["substantiation"]), key=f"sb{i}")
     if c[7].button("x", key=f"del{i}"):
         return False
@@ -98,21 +105,21 @@ if st.button("+ Add head of claim"):
 
 # ---------------- counterclaims ----------------
 st.header("2 · Counterclaims (respondent)")
-cc_total = st.number_input("Total recoverable counterclaims (USD)", 0.0, value=3_000_000.0, step=500_000.0,
-                           help="Enter the realistic (method/evidence-adjusted) value of the respondent's counterclaims.")
+cc_total = money(st, "Total recoverable counterclaims (USD)", 3_000_000.0, 500_000.0,
+                 help="Enter the realistic (method/evidence-adjusted) value of the respondent's counterclaims.")
 
 # ---------------- case context ----------------
 st.header("3 · Case context")
 cc = st.columns(4)
 enforcement_e = cc[0].slider("Enforcement factor e", 0.0, 1.0, 0.90, 0.05,
     help="Likelihood the award is actually enforced/collected in Egypt.")
-budget        = cc[1].number_input("Legal budget to pursue (USD)", 0.0, value=4_000_000.0, step=500_000.0)
+budget        = money(cc[1], "Legal budget to pursue (USD)", 4_000_000.0, 500_000.0)
 months        = cc[2].number_input("Expected duration (months)", 1, value=28)
 counsel       = cc[3].slider("Counsel / firm quality (1-5)", 1, 5, 4)
 cc2 = st.columns(4)
 tribunal      = cc2[0].slider("Tribunal disposition (1-5)", 1, 5, 4)
-adverse_lose  = cc2[1].number_input("Adverse/own cost if lost (USD)", 0.0, value=1_500_000.0, step=250_000.0)
-settlement    = cc2[2].number_input("Settlement on the table (USD, 0=none)", 0.0, value=0.0, step=1_000_000.0)
+adverse_lose  = money(cc2[1], "Adverse/own cost if lost (USD)", 1_500_000.0, 250_000.0)
+settlement    = money(cc2[2], "Settlement on the table (USD, 0=none)", 0.0, 1_000_000.0)
 settle_months = cc2[3].number_input("Months to settle", 1, value=6)
 
 # ---------------- contractor position ----------------
@@ -129,18 +136,15 @@ d_rate = 0.08  # discount rate (fixed market default)
 # ---------------- RUN ----------------
 st.markdown("---")
 if st.button("Run the model", type="primary"):
-    # patch AHP-2 weights into the engine
-    def lsi(counsel,tribunal,cs):
-        return M.legal_strength_index(counsel,tribunal,cs,w_counsel,w_trib,w_claimw)
-    M.legal_strength_index = lsi
-
     heads = [M.Head(**h) for h in st.session_state.heads]
     # represent counterclaims as a single 'other' head at its recoverable value
     counters = [M.Head("Counterclaims","other", nominal=cc_total, substantiation=5)]
 
     R,gclaim,gcounter,net_before = M.net_recovery(heads, counters, enforcement_e)
     cs  = M.claim_strength(heads)
-    L   = M.legal_strength_index(counsel, tribunal, cs)
+    # AHP-2 weights from the sidebar are passed straight into the engine function
+    L   = M.legal_strength_index(counsel, tribunal, cs,
+                                 w_counsel=w_counsel, w_tribunal=w_trib, w_claim=w_claimw)
     p   = M.probability_of_success(L)
     F,mult,pct = M.funder_price(R, budget, months, True)
     eligible, cover = M.funder_gate(R, budget, p, cover_target, p_floor)
